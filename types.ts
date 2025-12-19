@@ -1,5 +1,7 @@
 export enum AppPhase {
   IDLE = 'IDLE',
+  LOBBY = 'LOBBY',
+  THINKING = 'THINKING',
   WRITING = 'WRITING',
   COMPLETED = 'COMPLETED',
   REVIEWING = 'REVIEWING'

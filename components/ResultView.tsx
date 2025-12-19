@@ -35,11 +35,14 @@ const ResultView: React.FC<ResultViewProps> = ({ data, onRestart }) => {
   const seconds = data.totalTimeSeconds % 60;
   const isOvertime = data.totalTimeSeconds > 300;
 
-  const totalWords = Object.values(data.sections).reduce((acc, text) => {
+  // Explicitly type reduce generic to ensure totalWords is a number
+  const totalWords = Object.values(data.sections).reduce<number>((acc, text) => {
     return acc + (text as string).trim().split(/\s+/).filter(w => w.length > 0).length;
   }, 0);
 
-  const wpm = Math.round(totalWords / (data.totalTimeSeconds / 60));
+  // Prevent division by zero and ensure calculation uses numbers
+  const durationMinutes = data.totalTimeSeconds > 0 ? data.totalTimeSeconds / 60 : 1;
+  const wpm = Math.round(totalWords / durationMinutes);
 
   return (
     <div className="max-w-4xl mx-auto pb-24">

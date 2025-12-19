@@ -6,6 +6,7 @@ import WritingCard from './components/WritingCard';
 import ResultView from './components/ResultView';
 import Button from './components/Button';
 import HistoryList from './components/HistoryList';
+import Lobby from './components/Lobby';
 import { getEssayHistory, saveEssayToHistory, clearHistory } from './utils/storage';
 
 const App: React.FC = () => {
@@ -13,17 +14,30 @@ const App: React.FC = () => {
   const [currentTopic, setCurrentTopic] = useState<string>('');
   const [customTopicInput, setCustomTopicInput] = useState('');
   
+  // New state for multiplayer/challenge mode
+  const [encodedTopic, setEncodedTopic] = useState<string>('');
+
   // We hoist the state here so we can submit whatever is written when time runs out
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
   const [currentSectionText, setCurrentSectionText] = useState('');
   const [essayContent, setEssayContent] = useState<{ [key: string]: string }>({});
   
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [thinkingSecondsLeft, setThinkingSecondsLeft] = useState(20);
   const [history, setHistory] = useState<EssayHistoryItem[]>([]);
   
-  // Load history on mount
+  // Load history and check URL for challenge on mount
   useEffect(() => {
     setHistory(getEssayHistory());
+
+    // Check for challenge params
+    const params = new URLSearchParams(window.location.search);
+    const challenge = params.get('challenge');
+    if (challenge) {
+      setEncodedTopic(challenge);
+      setPhase(AppPhase.LOBBY);
+      // We keep the URL param here so a refresh doesn't kick the user out of the lobby
+    }
   }, []);
 
   const finishEssay = useCallback((finalContent: { [key: string]: string }, finalTime: number) => {
@@ -49,7 +63,25 @@ const App: React.FC = () => {
     setPhase(AppPhase.COMPLETED);
   }, [currentTopic]);
 
-  // Timer & Auto-Submit Logic
+  // Thinking Timer Logic
+  useEffect(() => {
+    let interval: any;
+    if (phase === AppPhase.THINKING) {
+      interval = setInterval(() => {
+        setThinkingSecondsLeft(prev => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            setPhase(AppPhase.WRITING);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  // Writing Timer & Auto-Submit Logic
   useEffect(() => {
     let interval: any;
     if (phase === AppPhase.WRITING) {
@@ -60,11 +92,6 @@ const App: React.FC = () => {
           // STRICT AUTO-SUBMIT CHECK
           if (nextVal >= TOTAL_TIME_LIMIT_SECONDS) {
             clearInterval(interval);
-            // Capture current state immediately
-            // Note: We use the function scope variable or refs usually, 
-            // but here we need to rely on the latest state from the closure or force a sync.
-            // Since this is inside setElapsedSeconds, we might not have access to the *very* latest text typed in the last millisecond 
-            // if React hasn't re-rendered, but strictly speaking, we need to trigger the finish effect.
             return nextVal; 
           }
           return nextVal;
@@ -74,8 +101,7 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [phase]);
 
-  // Effect to trigger finish when time is up
-  // We separate this from the interval to ensure we have access to currentSectionText state
+  // Effect to trigger finish when writing time is up
   useEffect(() => {
     if (phase === AppPhase.WRITING && elapsedSeconds >= TOTAL_TIME_LIMIT_SECONDS) {
        // Save the current section text before finishing
@@ -88,19 +114,57 @@ const App: React.FC = () => {
     }
   }, [elapsedSeconds, phase, finishEssay, currentSectionText, essayContent, currentSectionIndex, currentSectionText]);
 
-
-  const startSession = useCallback(() => {
-    const topicToUse = customTopicInput.trim() 
-      ? customTopicInput.trim() 
-      : TOPICS[Math.floor(Math.random() * TOPICS.length)];
-      
-    setCurrentTopic(topicToUse);
+  // Start logic
+  const initSession = (topic: string) => {
+    setCurrentTopic(topic);
     setEssayContent({});
     setCurrentSectionText('');
     setCurrentSectionIndex(0);
     setElapsedSeconds(0);
-    setPhase(AppPhase.WRITING);
+    setThinkingSecondsLeft(20); 
+    setPhase(AppPhase.THINKING);
+  };
+
+  const startThinkingPhase = useCallback(() => {
+    const topicToUse = customTopicInput.trim() 
+      ? customTopicInput.trim() 
+      : TOPICS[Math.floor(Math.random() * TOPICS.length)];
+    
+    initSession(topicToUse);
   }, [customTopicInput]);
+
+  const createChallenge = () => {
+    const randomTopic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
+    // Simple Base64 encoding to hide topic from casual glance in URL
+    // We use encodeURIComponent to handle special chars safely before btoa
+    const encoded = btoa(encodeURIComponent(randomTopic));
+    setEncodedTopic(encoded);
+    setPhase(AppPhase.LOBBY);
+
+    // Update URL so the host can also refresh if needed without losing the session
+    const url = new URL(window.location.href);
+    url.searchParams.set('challenge', encoded);
+    window.history.pushState({}, '', url.toString());
+  };
+
+  const startChallenge = () => {
+    // Decode topic
+    try {
+      const decodedTopic = decodeURIComponent(atob(encodedTopic));
+      
+      // Clean URL now that we are starting the actual game
+      window.history.replaceState({}, '', window.location.pathname);
+      
+      initSession(decodedTopic);
+    } catch (e) {
+      console.error("Failed to decode topic");
+      initSession("Error decoding topic");
+    }
+  };
+
+  const skipThinking = () => {
+    setPhase(AppPhase.WRITING);
+  };
 
   const handleNextSection = () => {
     const currentSectionId = SECTIONS[currentSectionIndex].id;
@@ -160,12 +224,55 @@ const App: React.FC = () => {
                 </div>
               </div>
               
-              <Button onClick={startSession} className="w-full text-lg py-4 shadow-xl shadow-indigo-200 hover:shadow-indigo-300 transform hover:-translate-y-1">
-                {customTopicInput ? 'Start Custom Session' : 'Start Random Challenge'}
-              </Button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Button onClick={startThinkingPhase} className="w-full text-lg py-4 shadow-xl shadow-indigo-200 hover:shadow-indigo-300 transform hover:-translate-y-1">
+                  {customTopicInput ? 'Start Solo' : 'Solo Challenge'}
+                </Button>
+                <Button onClick={createChallenge} variant="secondary" className="w-full text-lg py-4 border-slate-200 bg-white shadow-lg shadow-slate-200 hover:shadow-slate-300 text-indigo-600">
+                   Multiplayer
+                </Button>
+              </div>
             </div>
 
             <HistoryList history={history} onClear={handleClearHistory} />
+          </div>
+        );
+
+      case AppPhase.LOBBY:
+        return (
+          <Lobby 
+            encodedTopic={encodedTopic}
+            onStart={startChallenge}
+            onCancel={() => {
+              setPhase(AppPhase.IDLE);
+              window.history.replaceState({}, '', window.location.pathname);
+            }}
+          />
+        );
+
+      case AppPhase.THINKING:
+        return (
+          <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center animate-fadeIn bg-slate-900 text-white">
+            <div className="max-w-3xl w-full">
+               <div className="mb-4 text-indigo-400 font-bold tracking-widest uppercase text-sm">Your Topic</div>
+               <h2 className="text-3xl md:text-5xl font-extrabold mb-12 leading-tight">{currentTopic}</h2>
+               
+               <div className="flex flex-col items-center justify-center space-y-8">
+                  <div className="w-48 h-48 rounded-full border-4 border-indigo-500 flex items-center justify-center relative shadow-[0_0_30px_rgba(99,102,241,0.3)]">
+                      <div className="text-6xl font-mono font-bold">{thinkingSecondsLeft}</div>
+                      <div className="absolute -bottom-8 text-slate-400 text-sm font-medium">seconds to plan</div>
+                  </div>
+                  
+                  <div className="space-y-2 text-slate-300">
+                    <p className="text-lg">Take a breath.</p>
+                    <p className="text-lg">Think of 3 main points.</p>
+                  </div>
+
+                  <Button onClick={skipThinking} className="bg-white text-slate-900 hover:bg-slate-100 mt-8">
+                    I'm Ready - Start Now
+                  </Button>
+               </div>
+            </div>
           </div>
         );
 
@@ -215,7 +322,10 @@ const App: React.FC = () => {
                         sections: essayContent,
                         totalTimeSeconds: elapsedSeconds
                     }}
-                    onRestart={() => setPhase(AppPhase.IDLE)}
+                    onRestart={() => {
+                        setPhase(AppPhase.IDLE);
+                        window.history.replaceState({}, '', window.location.pathname);
+                    }}
                  />
             </div>
         );
